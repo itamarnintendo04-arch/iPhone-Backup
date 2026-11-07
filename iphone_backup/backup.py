@@ -78,7 +78,7 @@ def get_device_info(lockdown) -> DeviceInfo:
 async def probe_device() -> DeviceInfo:
     try:
         from pymobiledevice3.lockdown import create_using_usbmux
-        async with await create_using_usbmux() as lockdown:
+        async with await create_using_usbmux(connection_type="USB") as lockdown:
             return get_device_info(lockdown)
     except Exception as exc:
         raise explain_error(exc) from exc
@@ -105,6 +105,41 @@ async def backup_device(
                     backup_directory=directory,
                     full=full,
                     progress_callback=progress or (lambda _: None),
+                )
+            return device
+    except Exception as exc:
+        raise explain_error(exc) from exc
+
+
+async def restore_device(
+    directory: Path,
+    *,
+    source: str,
+    password: str = "",
+    progress: Callable[[float], None] | None = None,
+) -> DeviceInfo:
+    """Restore a complete local backup to the currently connected device.
+
+    This can replace on-device data; UI must obtain explicit consent.
+    """
+    from .cloud import available_local_backups
+    directory = Path(directory).expanduser()
+    if source not in available_local_backups(directory):
+        raise BackupError("Backup not found or incomplete. Select a valid local backup.")
+    try:
+        from pymobiledevice3.lockdown import create_using_usbmux
+        from pymobiledevice3.services.mobilebackup2 import Mobilebackup2Service
+
+        async with await create_using_usbmux(connection_type="USB") as lockdown:
+            device = get_device_info(lockdown)
+            async with Mobilebackup2Service(lockdown) as service:
+                await service.restore(
+                    backup_directory=directory,
+                    source=source,
+                    password=password,
+                    progress_callback=progress or (lambda _: None),
+                    remove=False,
+                    copy=True,
                 )
             return device
     except Exception as exc:
