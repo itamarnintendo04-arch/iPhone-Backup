@@ -278,14 +278,8 @@ class BackupApp(ctk.CTk):
         self.spawn("cloud-upload", worker)
 
     def download_cloud(self) -> None:
-        from tkinter import simpledialog
         settings = self.cloud_settings()
         root = self.local_root()
-        try:
-            # Listing is performed on a worker thread to keep GUI responsive.
-            pass
-        except Exception:
-            pass
         async def worker() -> None:
             import asyncio
             names = await asyncio.to_thread(list_cloud_backups, settings)
