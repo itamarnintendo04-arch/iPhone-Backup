@@ -80,20 +80,22 @@ def upload_backup(settings: CloudSettings, root: Path, udid: str,
     entries = []
     for idx, path in enumerate(files, 1):
         relative = path.relative_to(folder).as_posix()
-        s3.upload_file(str(path), settings.bucket, f"{PREFIX}/{udid}/{relative}")
+        s3.upload_file(str(path), settings.bucket, f"{PREFIX}/{udid}/{relative}",
+                       ExtraArgs={"ServerSideEncryption": "AES256"})
         entries.append({"path": relative, "size": path.stat().st_size, "sha256": _digest(path)})
         if progress:
             progress(idx, len(files))
     manifest = json.dumps({"version": 1, "device": udid, "files": entries}).encode("utf-8")
     # Publish the index last so interrupted uploads are not advertised as complete.
     s3.put_object(Bucket=settings.bucket, Key=f"{PREFIX}/{udid}/{MANIFEST}",
-                  Body=manifest, ContentType="application/json")
+                  Body=manifest, ContentType="application/json", ServerSideEncryption="AES256")
 
 
 def list_cloud_backups(settings: CloudSettings) -> list[str]:
     s3 = client(settings)
     paginator = s3.get_paginator("list_objects_v2")
     found = []
+    from botocore.exceptions import ClientError
     for page in paginator.paginate(Bucket=settings.bucket, Prefix=f"{PREFIX}/",
                                    Delimiter="/"):
         for item in page.get("CommonPrefixes", []):
@@ -102,10 +104,9 @@ def list_cloud_backups(settings: CloudSettings) -> list[str]:
                 _valid_udid(path)
                 s3.head_object(Bucket=settings.bucket, Key=f"{PREFIX}/{path}/{MANIFEST}")
                 found.append(path)
-            except (ValueError, Exception) as exc:
-                # Incomplete uploads are not offered as downloadable backups.
-                from botocore.exceptions import ClientError
-                if not isinstance(exc, ClientError):
+            except ClientError as exc:
+                # Missing manifests indicate incomplete uploads.
+                if exc.response.get("Error", {}).get("Code") not in ("404", "NoSuchKey", "NotFound"):
                     raise
     return sorted(set(found))
 
@@ -119,7 +120,7 @@ def download_backup(settings: CloudSettings, root: Path, udid: str,
     if manifest.get("version") != 1 or manifest.get("device") != udid:
         raise ValueError("Cloud manifest is invalid.")
     entries = manifest.get("files")
-    if not isinstance(entries, list) or len(entries) > 2_000_000:
+    if not isinstance(entries, list) or not entries or len(entries) > 2_000_000:
         raise ValueError("Cloud manifest has an invalid file list.")
     folder = root / udid
     if folder.exists():
